@@ -1,0 +1,275 @@
+<script type="module">
+import { supabase } from '/assets/js/supabaseClient.js'
+import { requireEditor, initAuthLinks } from '/assets/js/auth.js'
+import { Books, Chapters, Lessons, Questions } from '/assets/js/api.js'
+import { toast, renderOptions, $, $all, spinner } from '/assets/js/ui.js'
+
+await requireEditor('/')
+initAuthLinks()
+document.getElementById('year').textContent = new Date().getFullYear()
+
+// Load books for selects
+let books = await Books.list()
+const byId = (arr,id)=>arr.find(x=>x.id===id)
+
+function renderBooksTable(){
+  const el = $('#booksTable')
+  el.innerHTML = ''
+  if (!books.length){ el.innerHTML = '<div class="card">No books yet.</div>'; return }
+  const table = document.createElement('table')
+  table.className = 'table'
+  table.innerHTML = `<thead><tr><th>Title</th><th>Slug</th><th>Order</th><th></th></tr></thead><tbody></tbody>`
+  books.forEach(b=>{
+    const tr = document.createElement('tr')
+    tr.innerHTML = `<td>${b.title}</td><td>${b.slug}</td><td>${b.order_index ?? ''}</td><td><button class="btn secondary" data-del-book="${b.id}">Delete</button></td>`
+    table.querySelector('tbody').appendChild(tr)
+  })
+  el.appendChild(table)
+  $all('[data-del-book]').forEach(btn => btn.addEventListener('click', async () => {
+    if (!confirm('Delete book?')) return
+    await Books.remove(btn.getAttribute('data-del-book'))
+    books = await Books.list()
+    renderBooksTable()
+    await refreshSelects()
+  }))
+}
+
+async function refreshSelects(){
+  renderOptions($('#chapterBook'), books, x=>[x.id,x.title])
+  renderOptions($('#lessonBook'), books, x=>[x.id,x.title])
+  renderOptions($('#questionBook'), books, x=>[x.id,x.title])
+}
+renderBooksTable()
+await refreshSelects()
+
+// Book form with slug validation
+$('#bookForm').addEventListener('submit', async (e)=>{
+  e.preventDefault()
+  const payload = {
+    title: $('#bookTitle').value.trim(),
+    slug: $('#bookSlug').value.trim(),
+    description: $('#bookDesc').value.trim(),
+    order_index: Number($('#bookOrder').value || 1)
+  }
+  if (!payload.title || !payload.slug) return toast('Title and slug are required','error')
+  const slugOk = /^[a-z0-9-]+$/.test(payload.slug)
+  if (!slugOk) return toast('Slug must contain only lowercase letters, numbers, and hyphens','error')
+
+  spinner(true)
+  const { error } = await Books.create(payload)
+  spinner(false)
+  if (error) return toast(error.message,'error')
+  books = await Books.list()
+  renderBooksTable()
+  await refreshSelects()
+  e.target.reset()
+})
+
+// Chapters
+async function loadChaptersTable(){
+  const el = $('#chaptersTable')
+  el.innerHTML = ''
+  for (const b of books){
+    const chs = await Chapters.listByBook(b.id)
+    if (!chs.length) continue
+    const card = document.createElement('div')
+    card.className = 'card'
+    card.innerHTML = `<h4>${b.title}</h4>`
+    const table = document.createElement('table')
+    table.className = 'table'
+    table.innerHTML = `<thead><tr><th>Title</th><th>Order</th><th></th></tr></thead><tbody></tbody>`
+    chs.forEach(ch=>{
+      const tr = document.createElement('tr')
+      tr.innerHTML = `<td>${ch.title}</td><td>${ch.order_index ?? ''}</td><td><button class="btn secondary" data-del-ch="${ch.id}">Delete</button></td>`
+      table.querySelector('tbody').appendChild(tr)
+    })
+    card.appendChild(table)
+    el.appendChild(card)
+  }
+  $all('[data-del-ch]').forEach(btn => btn.addEventListener('click', async () => {
+    if (!confirm('Delete chapter?')) return
+    await Chapters.remove(btn.getAttribute('data-del-ch'))
+    await loadChaptersTable()
+  }))
+}
+await loadChaptersTable()
+
+$('#chapterForm').addEventListener('submit', async (e)=>{
+  e.preventDefault()
+  const payload = {
+    book_id: $('#chapterBook').value,
+    title: $('#chapterTitle').value.trim(),
+    order_index: Number($('#chapterOrder').value || 1)
+  }
+  if (!payload.book_id) return toast('Select a book','error')
+  if (!payload.title) return toast('Chapter title is required','error')
+  spinner(true)
+  const { error } = await Chapters.create(payload)
+  spinner(false)
+  if (error) return toast(error.message,'error')
+  await loadChaptersTable()
+  e.target.reset()
+})
+
+// Lessons
+$('#lessonBook').addEventListener('change', async (e)=>{
+  const bookId = e.target.value
+  $('#lessonChapter').disabled = !bookId
+  if (!bookId) { $('#lessonChapter').innerHTML=''; return }
+  const chs = await Chapters.listByBook(bookId)
+  renderOptions($('#lessonChapter'), chs, x=>[x.id,x.title])
+})
+
+async function renderLessonsTable(){
+  const wrap = $('#lessonsTable'); wrap.innerHTML = ''
+  for (const b of books){
+    const chs = await Chapters.listByBook(b.id)
+    for (const ch of chs){
+      const ls = await Lessons.listByChapter(ch.id)
+      if (!ls.length) continue
+      const card = document.createElement('div')
+      card.className = 'card'
+      card.innerHTML = `<h4>${b.title} — ${ch.title}</h4>`
+      const table = document.createElement('table')
+      table.className = 'table'
+      table.innerHTML = `<thead><tr><th>Lesson</th><th></th></tr></thead><tbody></tbody>`
+      ls.forEach(l=>{
+        const tr = document.createElement('tr')
+        tr.innerHTML = `<td>${l.title}</td><td><button class="btn secondary" data-del-lesson="${l.id}">Delete</button></td>`
+        table.querySelector('tbody').appendChild(tr)
+      })
+      card.appendChild(table)
+      wrap.appendChild(card)
+    }
+  }
+  $all('[data-del-lesson]').forEach(btn => btn.addEventListener('click', async ()=>{
+    if (!confirm('Delete lesson?')) return
+    await Lessons.remove(btn.getAttribute('data-del-lesson'))
+    await renderLessonsTable()
+  }))
+}
+await renderLessonsTable()
+
+$('#lessonForm').addEventListener('submit', async (e)=>{
+  e.preventDefault()
+  const chapter_id = $('#lessonChapter').value
+  if (!chapter_id) return toast('Select chapter','error')
+  const payload = {
+    chapter_id,
+    title: $('#lessonTitle').value.trim(),
+    content: $('#lessonContent').value
+  }
+  if (!payload.title) return toast('Lesson title is required','error')
+  spinner(true)
+  const { error } = await Lessons.create(payload)
+  spinner(false)
+  if (error) return toast(error.message,'error')
+  await renderLessonsTable()
+  e.target.reset()
+})
+
+// Questions
+function setupBookChapterLinkage(bookSelId, chapterSelId){
+  const b = $(bookSelId), c = $(chapterSelId)
+  b.addEventListener('change', async ()=>{
+    const id = b.value
+    c.disabled = !id
+    if (!id){ c.innerHTML = ''; return }
+    const chs = await Chapters.listByBook(id)
+    renderOptions(c, chs, x=>[x.id,x.title])
+  })
+}
+setupBookChapterLinkage('#questionBook','#questionChapter')
+
+async function renderQuestionsTable(){
+  const wrap = $('#questionsTable'); wrap.innerHTML = ''
+  for (const b of books){
+    const chs = await Chapters.listByBook(b.id)
+    for (const ch of chs){
+      const { data, error } = await supabase.from('questions').select('*').eq('chapter_id', ch.id).limit(50)
+      if (error || !data?.length) continue
+      const card = document.createElement('div')
+      card.className = 'card'
+      card.innerHTML = `<h4>${b.title} — ${ch.title}</h4>`
+      const table = document.createElement('table')
+      table.className = 'table'
+      table.innerHTML = `<thead><tr><th>Question</th><th>Correct</th><th>Diff</th><th></th></tr></thead><tbody></tbody>`
+      data.forEach(q=>{
+        const tr = document.createElement('tr')
+        tr.innerHTML = `<td style="max-width:520px">${q.question_text}</td><td>${q.correct_option}</td><td>${q.difficulty}</td><td><button class="btn secondary" data-del-q="${q.id}">Delete</button></td>`
+        table.querySelector('tbody').appendChild(tr)
+      })
+      card.appendChild(table)
+      wrap.appendChild(card)
+    }
+  }
+  $all('[data-del-q]').forEach(btn => btn.addEventListener('click', async ()=>{
+    if (!confirm('Delete question?')) return
+    await Questions.remove(btn.getAttribute('data-del-q'))
+    await renderQuestionsTable()
+  }))
+}
+await renderQuestionsTable()
+
+$('#questionForm').addEventListener('submit', async (e)=>{
+  e.preventDefault()
+  const chapter_id = $('#questionChapter').value
+  if (!chapter_id) return toast('Select chapter','error')
+  const payload = {
+    chapter_id,
+    question_text: $('#qText').value.trim(),
+    option_a: $('#optA').value.trim(),
+    option_b: $('#optB').value.trim(),
+    option_c: $('#optC').value.trim(),
+    option_d: $('#optD').value.trim(),
+    correct_option: $('#correctOpt').value,
+    explanation: $('#qExplain').value.trim(),
+    difficulty: $('#difficulty').value
+  }
+  if (!payload.question_text || !payload.option_a || !payload.option_b || !payload.option_c || !payload.option_d) {
+    return toast('All question fields are required','error')
+  }
+  spinner(true)
+  const { error } = await Questions.create(payload)
+  spinner(false)
+  if (error) return toast(error.message,'error')
+  await renderQuestionsTable()
+  e.target.reset()
+})
+
+// CSV import (simple CSV without commas in fields)
+function parseCSV(text){
+  const lines = text.split(/\r?\n/).filter(Boolean)
+  const headers = lines.shift().split(',').map(h=>h.trim())
+  return lines.map(line=>{
+    const cols = line.split(',').map(c=>c.trim())
+    const row = {}
+    headers.forEach((h,i)=> row[h]=cols[i] ?? '')
+    return row
+  })
+}
+document.getElementById('importBtn').addEventListener('click', async ()=>{
+  const file = document.getElementById('csvFile').files?.[0]
+  const ch = document.getElementById('questionChapter').value
+  if (!file) return toast('Choose a CSV file','error')
+  if (!ch) return toast('Select a chapter','error')
+  const text = await file.text()
+  const rows = parseCSV(text).map(r => ({
+    chapter_id: ch,
+    question_text: r.question_text,
+    option_a: r.option_a,
+    option_b: r.option_b,
+    option_c: r.option_c,
+    option_d: r.option_d,
+    correct_option: r.correct_option,
+    explanation: r.explanation || null,
+    difficulty: r.difficulty || 'medium'
+  }))
+  spinner(true)
+  const { error } = await Questions.bulkInsert(rows)
+  spinner(false)
+  if (error) return toast(error.message,'error')
+  toast('Imported successfully')
+  await renderQuestionsTable()
+})
+</script>

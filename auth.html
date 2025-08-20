@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AviPrep — Auth</title>
+<link rel="stylesheet" href="/assets/css/base.css">
+</head>
+<body>
+<header class="header">
+  <nav class="nav container">
+    <div class="brand"><div class="logo"></div><span>AviPrep</span></div>
+    <div class="nav-links">
+      <a href="/">Home</a>
+      <a href="/learning.html">Learning</a>
+      <a href="/quiz.html">Quiz</a>
+      <a href="/editor.html" data-link-editor style="display:none">Editor</a>
+      <a href="/profile.html" data-link-profile style="display:none">Profile</a>
+      <a href="/auth.html" data-link-login>Sign in</a>
+      <a href="/auth.html?mode=signup" data-link-signup>Sign up</a>
+      <button class="link" data-link-logout style="display:none">Logout</button>
+    </div>
+  </nav>
+</header>
+
+<main class="container" style="max-width:560px">
+  <h1 id="authTitle">Sign in</h1>
+  <p class="label" id="authSubtitle">Access your learning and quizzes</p>
+
+  <section class="card">
+    <form id="authForm" class="grid" autocomplete="on" novalidate>
+      <div id="displayNameWrap" style="display:none">
+        <label class="label" for="displayName">Display name</label>
+        <input class="input" id="displayName" placeholder="Jane Aviator">
+      </div>
+      <div>
+        <label class="label" for="email">Email</label>
+        <input class="input" id="email" type="email" placeholder="you@example.com" required>
+      </div>
+      <div>
+        <label class="label" for="password">Password</label>
+        <input class="input" id="password" type="password" placeholder="••••••••" required>
+      </div>
+      <button class="btn" id="submitBtn" type="submit">Sign in</button>
+      <div style="color:var(--color-muted)">
+        <span id="toggleText">Don’t have an account?</span>
+        <a id="toggleLink" href="/auth.html?mode=signup">Sign up</a>
+      </div>
+    </form>
+  </section>
+</main>
+
+<footer class="footer"><div class="container">&copy; <span id="year"></span> AviPrep</div></footer>
+
+<script type="module" src="/assets/js/supabaseClient.js"></script>
+<script type="module" src="/assets/js/auth.js"></script>
+<script type="module" src="/assets/js/ui.js"></script>
+<script type="module">
+import { supabase } from '/assets/js/supabaseClient.js'
+import { initAuthLinks } from '/assets/js/auth.js'
+import { toast, spinner } from '/assets/js/ui.js'
+
+document.getElementById('year').textContent = new Date().getFullYear()
+initAuthLinks()
+
+const params = new URLSearchParams(window.location.search)
+const mode = params.get('mode') === 'signup' ? 'signup' : 'signin'
+
+const authTitle = document.getElementById('authTitle')
+const authSubtitle = document.getElementById('authSubtitle')
+const displayNameWrap = document.getElementById('displayNameWrap')
+const displayName = document.getElementById('displayName')
+const email = document.getElementById('email')
+const password = document.getElementById('password')
+const submitBtn = document.getElementById('submitBtn')
+const toggleText = document.getElementById('toggleText')
+const toggleLink = document.getElementById('toggleLink')
+const form = document.getElementById('authForm')
+
+// Set UI by mode
+function setMode(m){
+  if (m === 'signup'){
+    authTitle.textContent = 'Sign up'
+    authSubtitle.textContent = 'Create your AviPrep account'
+    submitBtn.textContent = 'Create account'
+    displayNameWrap.style.display = 'block'
+    toggleText.textContent = 'Already have an account?'
+    toggleLink.textContent = 'Sign in'
+    toggleLink.href = '/auth.html'
+  } else {
+    authTitle.textContent = 'Sign in'
+    authSubtitle.textContent = 'Access your learning and quizzes'
+    submitBtn.textContent = 'Sign in'
+    displayNameWrap.style.display = 'none'
+    toggleText.textContent = 'Don’t have an account?'
+    toggleLink.textContent = 'Sign up'
+    toggleLink.href = '/auth.html?mode=signup'
+  }
+}
+setMode(mode)
+
+form.addEventListener('submit', async (e)=>{
+  e.preventDefault()
+  const em = email.value.trim()
+  const pw = password.value
+  if (!em || !pw){ toast('Email and password are required', 'error'); return }
+  spinner(true)
+  try {
+    if (mode === 'signup'){
+      // Create auth user
+      const { data, error } = await supabase.auth.signUp({ email: em, password: pw })
+      if (error) throw error
+      const user = data.user
+      if (!user){
+        toast('Check your inbox to confirm your email.', 'info')
+        return
+      }
+      // Ensure profile row exists
+      const display_name = (displayName.value || '').trim()
+      // Try to insert; ignore duplicate error if a trigger already created it
+      await supabase.from('profiles').upsert({
+        id: user.id,
+        display_name: display_name || user.email,
+        role: 'student'
+      }, { onConflict: 'id' })
+      toast('Account created. You are signed in.', 'info')
+      window.location.href = '/learning.html'
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({ email: em, password: pw })
+      if (error) throw error
+      window.location.href = '/learning.html'
+    }
+  } catch (err){
+    toast(err.message || 'Authentication error', 'error')
+  } finally {
+    spinner(false)
+  }
+})
+</script>
+</body>
+</html>

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AviPrep — Analytics</title>
+<link rel="stylesheet" href="/assets/css/base.css">
+</head>
+<body>
+<header class="header">
+  <nav class="nav container">
+    <div class="brand"><div class="logo"></div><span>AviPrep</span></div>
+    <div class="nav-links">
+      <a href="/">Home</a>
+      <a href="/learning.html">Learning</a>
+      <a href="/quiz.html">Quiz</a>
+      <a href="/editor.html" data-link-editor style="display:none">Editor</a>
+      <a href="/profile.html" data-link-profile style="display:none">Profile</a>
+      <a href="/auth.html" data-link-login>Sign in</a>
+      <a href="/auth.html?mode=signup" data-link-signup>Sign up</a>
+      <button class="link" data-link-logout style="display:none">Logout</button>
+    </div>
+  </nav>
+</header>
+
+<main class="container">
+  <h1>Performance Analytics</h1>
+  <section class="card">
+    <div id="summary" class="grid three">
+      <div class="card"><div class="label">Total Attempts</div><div id="mAttempts" style="font-size:1.6rem">0</div></div>
+      <div class="card"><div class="label">Average Score</div><div id="mAvg" style="font-size:1.6rem">0%</div></div>
+      <div class="card"><div class="label">Questions Answered</div><div id="mQ" style="font-size:1.6rem">0</div></div>
+    </div>
+    <h3 style="margin-top:1rem">History</h3>
+    <div id="history"></div>
+  </section>
+</main>
+
+<footer class="footer"><div class="container">&copy; <span id="year"></span> AviPrep</div></footer>
+
+<script type="module" src="/assets/js/supabaseClient.js"></script>
+<script type="module" src="/assets/js/auth.js"></script>
+<script type="module" src="/assets/js/api.js"></script>
+<script type="module" src="/assets/js/ui.js"></script>
+<script type="module">
+import { requireAuth, initAuthLinks } from '/assets/js/auth.js'
+import { Attempts } from '/assets/js/api.js'
+import { toast, $, $all } from '/assets/js/ui.js'
+
+await requireAuth()
+initAuthLinks()
+document.getElementById('year').textContent = new Date().getFullYear()
+
+async function load(){
+  let data=[]
+  try { data = await Attempts.listMine() } catch(e){ toast(e.message,'error'); return }
+  document.getElementById('mAttempts').textContent = data.length
+  const avg = data.length ? Math.round(data.reduce((s,a)=>s+(a.score_percent||0),0)/data.length) : 0
+  document.getElementById('mAvg').textContent = `${avg}%`
+  document.getElementById('mQ').textContent = data.reduce((s,a)=>s+(a.question_count||0),0)
+
+  const history = document.getElementById('history')
+  history.innerHTML = ''
+  if (!data.length){ history.innerHTML = '<div class="card">No attempts yet.</div>'; return }
+  data.forEach(at => {
+    const card = document.createElement('div')
+    card.className = 'card'
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;gap:.6rem;flex-wrap:wrap">
+        <div><strong>${at.books?.title || 'Book'}</strong> — ${at.chapters?.title || 'Chapter'}</div>
+        <div class="tag">Score: ${at.score_percent}%</div>
+      </div>
+      <div style="color:var(--color-muted);margin-top:.3rem">${new Date(at.completed_at || at.started_at).toLocaleString()} · ${at.question_count} questions</div>
+      <div style="margin-top:.3rem">Correct: ${at.correct_count} · Wrong: ${at.wrong_count}</div>
+    `
+    history.appendChild(card)
+  })
+}
+load()
+</script>
+</body>
+</html>

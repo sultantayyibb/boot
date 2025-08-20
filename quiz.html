@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AviPrep — Quiz</title>
+<link rel="stylesheet" href="/assets/css/base.css">
+</head>
+<body>
+<header class="header">
+  <nav class="nav container">
+    <div class="brand"><div class="logo"></div><span>AviPrep</span></div>
+    <div class="nav-links">
+      <a href="/">Home</a>
+      <a href="/learning.html">Learning</a>
+      <a href="/quiz.html">Quiz</a>
+      <a href="/editor.html" data-link-editor style="display:none">Editor</a>
+      <a href="/profile.html" data-link-profile style="display:none">Profile</a>
+      <a href="/auth.html" data-link-login>Sign in</a>
+      <a href="/auth.html?mode=signup" data-link-signup>Sign up</a>
+      <button class="link" data-link-logout style="display:none">Logout</button>
+    </div>
+  </nav>
+</header>
+
+<main class="container quiz-container">
+  <h1>Quiz</h1>
+
+  <section class="card" id="setup">
+    <div class="grid two">
+      <div>
+        <label class="label">Book</label>
+        <select id="bookSelect"></select>
+      </div>
+      <div>
+        <label class="label">Chapter</label>
+        <select id="chapterSelect" disabled></select>
+      </div>
+      <div>
+        <label class="label">Number of questions</label>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+          <label><input type="radio" name="count" value="20" checked> 20</label>
+          <label><input type="radio" name="count" value="40"> 40</label>
+          <label><input type="radio" name="count" value="80"> 80</label>
+        </div>
+      </div>
+      <div style="align-self:end">
+        <button class="btn" id="startBtn" disabled>Start Quiz</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" id="quiz" style="display:none">
+    <div class="progress" aria-hidden="true"><div id="bar"></div></div>
+    <p id="qProgress" style="margin:.6rem 0;color:var(--color-muted)"></p>
+    <h3 id="qText"></h3>
+    <div id="qOptions" class="grid"></div>
+    <div style="display:flex;gap:.5rem;justify-content:space-between;margin-top:1rem">
+      <button class="btn secondary" id="prevBtn">Previous</button>
+      <div style="display:flex;gap:.5rem">
+        <button class="btn secondary" id="flagBtn">Flag</button>
+        <button class="btn" id="nextBtn">Next</button>
+        <button class="btn" id="submitBtn" style="display:none">Submit</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" id="results" style="display:none">
+    <h3>Results</h3>
+    <p><strong>Correct:</strong> <span id="resCorrect">0</span> · <strong>Wrong:</strong> <span id="resWrong">0</span> · <strong>Score:</strong> <span id="resScore">0%</span></p>
+    <div id="review" class="grid"></div>
+  </section>
+</main>
+
+<footer class="footer"><div class="container">&copy; <span id="year"></span> AviPrep</div></footer>
+
+<script type="module" src="/assets/js/supabaseClient.js"></script>
+<script type="module" src="/assets/js/auth.js"></script>
+<script type="module" src="/assets/js/api.js"></script>
+<script type="module" src="/assets/js/ui.js"></script>
+<script type="module">
+import { requireAuth, initAuthLinks } from '/assets/js/auth.js'
+import { Books, Chapters, Questions, Attempts } from '/assets/js/api.js'
+import { toast, renderOptions, $, $all, spinner } from '/assets/js/ui.js'
+import { supabase } from '/assets/js/supabaseClient.js'
+
+await requireAuth()
+initAuthLinks()
+document.getElementById('year').textContent = new Date().getFullYear()
+
+const bookSelect = $('#bookSelect')
+const chapterSelect = $('#chapterSelect')
+const startBtn = $('#startBtn')
+const qText = $('#qText')
+const qOptions = $('#qOptions')
+const qProgress = $('#qProgress')
+const bar = $('#bar')
+const prevBtn = $('#prevBtn')
+const nextBtn = $('#nextBtn')
+const flagBtn = $('#flagBtn')
+const submitBtn = $('#submitBtn')
+const setup = $('#setup')
+const quiz = $('#quiz')
+const results = $('#results')
+
+let userId = null
+let books = []
+let chapters = []
+let selectedBook = null
+let selectedChapter = null
+let count = 20
+
+let questions = []
+let current = 0
+let answers = [] // {question_id, selected, correctOption}
+let flags = new Set()
+let attempt = null
+
+supabase.auth.getUser().then(({ data }) => userId = data.user.id)
+
+function updateStartState(){
+  startBtn.disabled = !(bookSelect.value && chapterSelect.value)
+}
+$all('input[name="count"]').forEach(r => r.addEventListener('change', () => count = Number(r.value)))
+
+bookSelect.addEventListener('change', async () => {
+  selectedBook = bookSelect.value
+  chapterSelect.disabled = !selectedBook
+  startBtn.disabled = true
+  if (!selectedBook) return
+  spinner(true)
+  try {
+    chapters = await Chapters.listByBook(selectedBook)
+    renderOptions(chapterSelect, chapters, x => [x.id, x.title])
+  } catch (e) { toast(e.message, 'error') }
+  spinner(false)
+})
+chapterSelect.addEventListener('change', () => {
+  selectedChapter = chapterSelect.value
+  updateStartState()
+})
+
+async function loadBooks(){
+  try {
+    books = await Books.list()
+    renderOptions(bookSelect, books, x => [x.id, x.title])
+  } catch (e) { toast(e.message,'error') }
+}
+loadBooks()
+
+startBtn.addEventListener('click', async () => {
+  if (!selectedBook || !selectedChapter) return
+  spinner(true)
+  try {
+    questions = await Questions.listRandomByChapter(selectedChapter, count)
+    if (!questions.length) { toast('No questions available for this chapter', 'error'); spinner(false); return }
+    attempt = await Attempts.createAttempt({
+      user_id: userId,
+      book_id: selectedBook,
+      chapter_id: selectedChapter,
+      question_count: count,
+      started_at: new Date().toISOString(),
+      correct_count: 0, wrong_count: 0, score_percent: 0
+    })
+    current = 0
+    answers = new Array(questions.length).fill(null)
+    flags.clear()
+    setup.style.display = 'none'
+    quiz.style.display = 'block'
+    results.style.display = 'none'
+    renderQuestion()
+  } catch (e) { toast(e.message,'error') }
+  spinner(false)
+})
+
+function renderQuestion(){
+  const q = questions[current]
+  qText.textContent = q.question_text
+  qOptions.innerHTML = ''
+  const opts = [
+    ['A', q.option_a],
+    ['B', q.option_b],
+    ['C', q.option_c],
+    ['D', q.option_d],
+  ]
+  opts.forEach(([k, v]) => {
+    const id = `opt-${k}`
+    const wrapper = document.createElement('label')
+    wrapper.style.display = 'block'
+    wrapper.style.padding = '.4rem .6rem'
+    wrapper.style.border = '1px solid rgba(255,255,255,0.12)'
+    wrapper.style.borderRadius = '10px'
+    wrapper.style.margin = '.4rem 0'
+    wrapper.style.cursor = 'pointer'
+    const inp = document.createElement('input')
+    inp.type = 'radio'
+    inp.name = 'opt'
+    inp.value = k
+    inp.style.marginRight = '.5rem'
+    if (answers[current]?.selected === k) inp.checked = true
+    inp.addEventListener('change', () => {
+      answers[current] = { question_id: q.id, selected: k, correctOption: q.correct_option }
+      updateNav()
+    })
+    wrapper.appendChild(inp)
+    const span = document.createElement('span')
+    span.innerHTML = `<strong>${k}.</strong> ${v}`
+    wrapper.appendChild(span)
+    qOptions.appendChild(wrapper)
+  })
+  qProgress.textContent = `Question ${current + 1} of ${questions.length}`
+  bar.style.width = `${((current + 1) / questions.length) * 100}%`
+  prevBtn.disabled = current === 0
+  nextBtn.style.display = current < questions.length - 1 ? 'inline-flex' : 'none'
+  submitBtn.style.display = current === questions.length - 1 ? 'inline-flex' : 'none'
+  flagBtn.className = 'btn secondary'
+  if (flags.has(current)) flagBtn.className = 'btn'
+}
+prevBtn.addEventListener('click', () => {
+  if (current > 0) { current--; renderQuestion() }
+})
+nextBtn.addEventListener('click', () => {
+  if (current < questions.length - 1) { current++; renderQuestion() }
+})
+flagBtn.addEventListener('click', () => {
+  if (flags.has(current)) flags.delete(current); else flags.add(current)
+  renderQuestion()
+})
+submitBtn.addEventListener('click', async () => {
+  // compute results
+  const total = questions.length
+  let correct = 0
+  let wrong = 0
+  const answerRows = []
+  for (let i=0;i<total;i++){
+    const q = questions[i]
+    const sel = answers[i]?.selected || null
+    const isCorrect = sel && sel === q.correct_option
+    if (isCorrect) correct++; else wrong++
+    answerRows.push({
+      attempt_id: attempt.id,
+      question_id: q.id,
+      selected_option: sel,
+      is_correct: !!isCorrect,
+      created_at: new Date().toISOString()
+    })
+  }
+  const score = Math.round((correct / total) * 100)
+  spinner(true)
+  try {
+    await Attempts.insertAnswers(answerRows)
+    await Attempts.completeAttempt(attempt.id, {
+      completed_at: new Date().toISOString(),
+      correct_count: correct,
+      wrong_count: wrong,
+      score_percent: score
+    })
+  } catch (e) { toast(e.message, 'error') }
+  spinner(false)
+  quiz.style.display = 'none'
+  results.style.display = 'block'
+  document.getElementById('resCorrect').textContent = correct
+  document.getElementById('resWrong').textContent = wrong
+  document.getElementById('resScore').textContent = `${score}%`
+  renderReview()
+})
+
+function renderReview(){
+  const review = document.getElementById('review')
+  review.innerHTML = ''
+  questions.forEach((q, idx) => {
+    const sel = answers[idx]?.selected
+    const card = document.createElement('div')
+    card.className = 'card'
+    const right = sel === q.correct_option
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;gap:.6rem;flex-wrap:wrap">
+        <strong>Q${idx+1}.</strong>
+        <span class="tag" style="border-color:${right?'#1fbf75':'#bf1f58'};color:${right?'#7ef0b5':'#ffa2b9'}">${right?'Correct':'Wrong'}</span>
+      </div>
+      <div style="margin-top:.4rem">${q.question_text}</div>
+      <div style="margin-top:.4rem;color:var(--color-muted)">Your answer: ${sel ?? '—'} · Correct: ${q.correct_option}</div>
+      ${q.explanation ? `<details style="margin-top:.4rem"><summary>Explanation</summary><div style="color:var(--color-muted);margin-top:.3rem">${q.explanation}</div></details>`:''}
+    `
+    review.appendChild(card)
+  })
+}
+</script>
+</body>
+</html>

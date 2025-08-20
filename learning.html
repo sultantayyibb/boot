@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AviPrep — Learning</title>
+<link rel="stylesheet" href="/assets/css/base.css">
+</head>
+<body>
+<header class="header">
+  <nav class="nav container">
+    <div class="brand"><div class="logo"></div><span>AviPrep</span></div>
+    <div class="nav-links">
+      <a href="/">Home</a>
+      <a href="/learning.html">Learning</a>
+      <a href="/quiz.html">Quiz</a>
+      <a href="/editor.html" data-link-editor style="display:none">Editor</a>
+      <a href="/profile.html" data-link-profile style="display:none">Profile</a>
+      <a href="/auth.html" data-link-login>Sign in</a>
+      <a href="/auth.html?mode=signup" data-link-signup>Sign up</a>
+      <button class="link" data-link-logout style="display:none">Logout</button>
+    </div>
+  </nav>
+</header>
+
+<main class="container">
+  <h1>Learning</h1>
+  <div class="layout" style="min-height:60vh">
+    <aside class="sidebar">
+      <div style="display:flex;gap:.5rem;margin-bottom:.6rem">
+        <input class="input" id="bookSearch" placeholder="Search books...">
+      </div>
+      <div id="booksList" class="grid"></div>
+    </aside>
+    <section>
+      <div class="cards" id="chaptersList"></div>
+      <article id="lessonsWrap" style="margin-top:1rem;display:none">
+        <h2 id="chapterTitle"></h2>
+        <div id="lessonsList" class="cards"></div>
+        <div class="card" id="lessonViewer" style="display:none">
+          <h3 id="lessonTitle"></h3>
+          <div id="lessonContent" style="line-height:1.6"></div>
+        </div>
+      </article>
+    </section>
+  </div>
+</main>
+
+<footer class="footer"><div class="container">&copy; <span id="year"></span> AviPrep</div></footer>
+
+<script type="module" src="/assets/js/supabaseClient.js"></script>
+<script type="module" src="/assets/js/auth.js"></script>
+<script type="module" src="/assets/js/api.js"></script>
+<script type="module" src="/assets/js/ui.js"></script>
+<script type="module">
+import { requireAuth, initAuthLinks } from '/assets/js/auth.js'
+import { Books, Chapters, Lessons } from '/assets/js/api.js'
+import { toast, renderOptions, $, $all, spinner } from '/assets/js/ui.js'
+
+await requireAuth()
+initAuthLinks()
+document.getElementById('year').textContent = new Date().getFullYear()
+
+const booksList = $('#booksList')
+const chaptersList = $('#chaptersList')
+const bookSearch = $('#bookSearch')
+const lessonsWrap = $('#lessonsWrap')
+const lessonViewer = $('#lessonViewer')
+const lessonsList = $('#lessonsList')
+const chapterTitle = $('#chapterTitle')
+const lessonTitle = $('#lessonTitle')
+const lessonContent = $('#lessonContent')
+
+let books = []
+let selectedBook = null
+let chapters = []
+let selectedChapter = null
+let lessons = []
+
+async function loadBooks(){
+  spinner(true)
+  try {
+    books = await Books.list()
+    renderBooks(books)
+  } catch (e) { toast(e.message, 'error') }
+  spinner(false)
+}
+function renderBooks(items){
+  const q = bookSearch.value.toLowerCase()
+  booksList.innerHTML = ''
+  items.filter(b => b.title.toLowerCase().includes(q)).forEach(b => {
+    const card = document.createElement('button')
+    card.className = 'card'
+    card.style.textAlign = 'left'
+    card.innerHTML = `<strong>${b.title}</strong><div style="color:var(--color-muted);font-size:.9rem">${b.description ?? ''}</div>`
+    card.addEventListener('click', () => selectBook(b))
+    booksList.appendChild(card)
+  })
+}
+bookSearch.addEventListener('input', () => renderBooks(books))
+
+async function selectBook(b){
+  selectedBook = b
+  chaptersList.innerHTML = ''
+  lessonsWrap.style.display = 'none'
+  spinner(true)
+  try {
+    chapters = await Chapters.listByBook(b.id)
+    if (!chapters.length) {
+      chaptersList.innerHTML = '<div class="card">No chapters. Editors can add one.</div>'
+      return
+    }
+    chapters.forEach(ch => {
+      const c = document.createElement('div')
+      c.className = 'card'
+      c.innerHTML = `<strong>${ch.title}</strong><div style="margin-top:.4rem"><a class="btn secondary" data-open-ch="${ch.id}">Open</a></div>`
+      chaptersList.appendChild(c)
+    })
+    $all('[data-open-ch]').forEach(btn => btn.addEventListener('click', () => selectChapter(btn.getAttribute('data-open-ch'))))
+  } catch (e) { toast(e.message,'error') }
+  spinner(false)
+}
+
+async function selectChapter(chapterId){
+  selectedChapter = chapters.find(x => x.id === chapterId)
+  lessonsWrap.style.display = 'block'
+  chapterTitle.textContent = selectedChapter?.title || ''
+  lessonViewer.style.display = 'none'
+  spinner(true)
+  try {
+    lessons = await Lessons.listByChapter(chapterId)
+    lessonsList.innerHTML = ''
+    if (!lessons.length) {
+      lessonsList.innerHTML = '<div class="card">No lessons in this chapter yet.</div>'
+      spinner(false)
+      return
+    }
+    lessons.forEach(ls => {
+      const el = document.createElement('div')
+      el.className = 'card'
+      el.innerHTML = `<strong>${ls.title}</strong><div style="margin-top:.4rem"><button class="btn secondary" data-open-lesson="${ls.id}">Read</button></div>`
+      lessonsList.appendChild(el)
+    })
+    $all('[data-open-lesson]').forEach(btn => btn.addEventListener('click', () => openLesson(btn.getAttribute('data-open-lesson'))))
+  } catch (e) { toast(e.message,'error') }
+  spinner(false)
+}
+
+function sanitize(html) {
+  // Minimal sanitization: strip script tags
+  const tmp = document.createElement('div')
+  tmp.innerHTML = html ?? ''
+  tmp.querySelectorAll('script').forEach(s => s.remove())
+  return tmp.innerHTML
+}
+
+function openLesson(lessonId){
+  const ls = lessons.find(l => l.id === lessonId)
+  if (!ls) return
+  lessonTitle.textContent = ls.title
+  lessonContent.innerHTML = sanitize(ls.content)
+  lessonViewer.style.display = 'block'
+}
+
+loadBooks()
+</script>
+</body>
+</html>
